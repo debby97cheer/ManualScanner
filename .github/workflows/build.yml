@@ -1,0 +1,55 @@
+name: Build Manual Scanner IPA
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch: 
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+    - name: 检出代码
+      uses: actions/checkout@v4
+
+    - name: 设置 Xcode
+      run: sudo xcode-select -switch /Applications/Xcode.app
+
+    - name: 编译并生成归档 (Archive)
+      run: |
+        # 依然进入原本的 FirstContact 目录
+        cd ios/FirstContact
+        
+        xcodebuild archive \
+          -project "FirstContact.xcodeproj" \
+          -scheme "FirstContact" \
+          -configuration Release \
+          -destination 'generic/platform=iOS' \
+          -archivePath "${{ runner.temp }}/build.xcarchive" \
+          CODE_SIGN_IDENTITY="" \
+          CODE_SIGNING_REQUIRED=NO \
+          CODE_SIGNING_ALLOWED=NO
+
+    - name: 强行注入权限与桌面名称并打包 IPA
+      run: |
+        cd ${{ runner.temp }}
+        mkdir Payload
+        mv build.xcarchive/Products/Applications/*.app Payload/
+        
+        # 1. 注入扫描仪和相册权限
+        /usr/libexec/PlistBuddy -c "Add :NSCameraUsageDescription string '需要使用相机来扫描说明书纸张'" Payload/FirstContact.app/Info.plist
+        /usr/libexec/PlistBuddy -c "Add :NSPhotoLibraryAddUsageDescription string '需要保存说明书长图到您的相册'" Payload/FirstContact.app/Info.plist
+        /usr/libexec/PlistBuddy -c "Add :NSPhotoLibraryUsageDescription string '需要访问相册以保存文档'" Payload/FirstContact.app/Info.plist
+        
+        # 2. 神级障眼法：强行把手机桌面上显示的 App 名字改成“说明书管家”！
+        /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string '说明书管家'" Payload/FirstContact.app/Info.plist
+        
+        # 3. 压缩生成最终的 IPA
+        zip -qr ManualScanner.ipa Payload
+
+    - name: 上传 IPA 供下载
+      uses: actions/upload-artifact@v4
+      with:
+        name: ManualScanner-App
+        path: ${{ runner.temp }}/ManualScanner.ipa
