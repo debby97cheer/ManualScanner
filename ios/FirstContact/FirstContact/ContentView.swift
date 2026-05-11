@@ -33,7 +33,7 @@ enum SortOption: String, CaseIterable {
     case titleAsc = "名称排序"
 }
 
-// MARK: - 3. OCR 核心引擎 (空间几何排版还原算法)
+// MARK: - 3. OCR 核心引擎 (空间排版还原算法)
 struct TextElement { let text: String; let rect: CGRect }
 struct OCRHelper {
     static func recognizeText(from image: UIImage) -> String {
@@ -104,7 +104,7 @@ class ManualStore: ObservableObject {
 }
 
 struct BackupDocument: FileDocument {
-    static var readableContentTypes: [UTType] { [.json, .plainText, .data] }
+    static var readableContentTypes: [UTType] { [.json] }
     var fileURL: URL
     init(url: URL) { self.fileURL = url }
     init(configuration: ReadConfiguration) throws { fatalError("只用于导出") }
@@ -118,13 +118,13 @@ struct ContentView: View {
     @State private var isProcessing = false
     @State private var processingText = ""
     
-    // 导入导出
+    // 导入导出状态
     @State private var showExporter = false
     @State private var showImporter = false
     @State private var alertMessage = ""
     @State private var showAlert = false
     
-    // 封面与多图导入
+    // 封面与导入
     @State private var selectedPhotos: [PhotosPickerItem] = []
     @State private var selectedCoverItem: PhotosPickerItem? = nil
     @State private var manualToChangeCover: Manual? = nil
@@ -136,7 +136,7 @@ struct ContentView: View {
     @State private var manualToEdit: Manual? = nil
     @State private var showCategorySheet = false
     
-    // 【新增】批量管理状态
+    // 批量管理
     @State private var isEditingMode = false
     @State private var selectedManualIDs = Set<UUID>()
     
@@ -171,7 +171,6 @@ struct ContentView: View {
                     ScrollView {
                         LazyVGrid(columns: columns, spacing: 16) {
                             ForEach(filteredAndSortedManuals) { manual in
-                                // 【新增】编辑模式下的卡片逻辑
                                 if isEditingMode {
                                     ManualCard(manual: manual)
                                         .overlay(
@@ -200,7 +199,7 @@ struct ContentView: View {
                             }
                         }
                         .padding(16)
-                        .padding(.bottom, 100) // 留足底部空间
+                        .padding(.bottom, 100)
                     }
                 }
                 
@@ -208,7 +207,6 @@ struct ContentView: View {
                 VStack {
                     Spacer()
                     if isEditingMode {
-                        // 【新增】编辑模式下的批量删除按钮
                         HStack {
                             Button(action: {
                                 withAnimation {
@@ -227,7 +225,6 @@ struct ContentView: View {
                         }
                         .padding(.horizontal, 24).padding(.bottom, 20)
                     } else {
-                        // 正常的扫描、导入、悬浮分类按钮
                         HStack(alignment: .bottom) {
                             HStack(spacing: 15) {
                                 Button(action: { isScanning = true }) {
@@ -242,15 +239,9 @@ struct ContentView: View {
                             }
                             .frame(maxWidth: .infinity)
                             
-                            // 【新增】分类悬浮按钮 (FAB)
                             Button(action: { showCategorySheet = true }) {
                                 Image(systemName: "square.grid.2x2.fill")
-                                    .font(.system(size: 22))
-                                    .frame(width: 54, height: 54)
-                                    .background(Color.orange)
-                                    .foregroundColor(.white)
-                                    .clipShape(Circle())
-                                    .shadow(color: .orange.opacity(0.4), radius: 8, x: 0, y: 4)
+                                    .font(.system(size: 22)).frame(width: 54, height: 54).background(Color.orange).foregroundColor(.white).clipShape(Circle()).shadow(color: .orange.opacity(0.4), radius: 8, x: 0, y: 4)
                             }
                         }
                         .padding(.horizontal, 20).padding(.bottom, 20)
@@ -272,18 +263,15 @@ struct ContentView: View {
                             Picker("排序", selection: $sortOption) { ForEach(SortOption.allCases, id: \.self) { o in Text(o.rawValue).tag(o) } }
                         } label: { Image(systemName: "arrow.up.arrow.down.circle").font(.title3) }
                         
-                        // 【新增】批量管理切换按钮
                         Button(action: {
                             withAnimation { isEditingMode.toggle() }
                             if !isEditingMode { selectedManualIDs.removeAll() }
                         }) {
-                            Text(isEditingMode ? "完成" : "管理")
-                                .font(.system(size: 16, weight: .bold))
+                            Text(isEditingMode ? "完成" : "管理").font(.system(size: 16, weight: .bold))
                         }
                     }
                 }
             }
-            // 分类浏览面页
             .sheet(isPresented: $showCategorySheet) { CategoryListView(store: store, searchText: $searchText) }
             .photosPicker(isPresented: $isShowingCoverPicker, selection: $selectedCoverItem, matching: .images)
             .onChange(of: selectedCoverItem) { newItem in handleCoverSelection(item: newItem) }
@@ -292,24 +280,23 @@ struct ContentView: View {
             .fileExporter(isPresented: $showExporter, document: BackupDocument(url: store.savePath), contentType: .json, defaultFilename: "Manuals_Backup.json") { result in
                 switch result { case .success: showSuccess("导出备份成功！") case .failure: break }
             }
-            // 【核心修复】：放宽 UTType，并加入沙盒穿透算法
-            .fileImporter(isPresented: $showImporter, allowedContentTypes: [.json, .plainText, .data], allowsMultipleSelection: false) { result in
+            // 【核心修复：开放所有文件类型 UTType.item，强制沙盒穿透读取】
+            .fileImporter(isPresented: $showImporter, allowedContentTypes: [.item], allowsMultipleSelection: false) { result in
                 switch result {
                 case .success(let urls):
                     guard let url = urls.first else { return }
                     if url.startAccessingSecurityScopedResource() {
                         defer { url.stopAccessingSecurityScopedResource() }
-                        // 沙盒穿透：先拷贝到临时目录，再读取
                         let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(url.lastPathComponent)
                         try? FileManager.default.removeItem(at: tempURL)
                         do {
                             try FileManager.default.copyItem(at: url, to: tempURL)
-                            if store.restore(from: tempURL) { showSuccess("恢复成功！加载了 \(store.manuals.count) 份说明书。") } else { showSuccess("恢复失败：文件格式不正确。") }
+                            if store.restore(from: tempURL) { showSuccess("恢复成功！加载了 \(store.manuals.count) 份说明书。") } else { showSuccess("恢复失败：文件格式不正确，请选择正确的备份文件。") }
                         } catch {
-                            showSuccess("恢复失败：无法复制文件。")
+                            showSuccess("读取文件失败：权限被系统拒绝。")
                         }
                     }
-                case .failure: showSuccess("读取文件失败")
+                case .failure: showSuccess("未能获取文件读取权限")
                 }
             }
             .alert(isPresented: $showAlert) { Alert(title: Text("系统提示"), message: Text(alertMessage), dismissButton: .default(Text("好的"))) }
@@ -358,7 +345,7 @@ struct ContentView: View {
     }
 }
 
-// MARK: - 6. 【新增】分类面板
+// MARK: - 6. 分类面板
 struct CategoryListView: View {
     @ObservedObject var store: ManualStore
     @Binding var searchText: String
@@ -376,24 +363,19 @@ struct CategoryListView: View {
             List {
                 ForEach(groupedManuals.keys.sorted(), id: \.self) { category in
                     Button(action: {
-                        // 点击分类自动把搜索框填上类别名并关掉面板
                         searchText = category == "未分类" ? "" : category
                         dismiss()
                     }) {
                         HStack {
-                            Image(systemName: category == "未分类" ? "folder" : "folder.fill")
-                                .foregroundColor(category == "未分类" ? .gray : .orange)
-                                .font(.title2)
+                            Image(systemName: category == "未分类" ? "folder" : "folder.fill").foregroundColor(category == "未分类" ? .gray : .orange).font(.title2)
                             Text(category).font(.headline).foregroundColor(.primary)
                             Spacer()
                             Text("\(groupedManuals[category]?.count ?? 0) 份").foregroundColor(.secondary).font(.subheadline)
-                        }
-                        .padding(.vertical, 8)
+                        }.padding(.vertical, 8)
                     }
                 }
             }
-            .navigationTitle("分类检索")
-            .navigationBarTitleDisplayMode(.inline)
+            .navigationTitle("分类检索").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .navigationBarTrailing) { Button("关闭") { dismiss() } } }
         }
     }
@@ -401,18 +383,14 @@ struct CategoryListView: View {
 
 // MARK: - 7. 编辑属性面板
 struct EditManualInfoSheet: View {
-    let manual: Manual
-    @ObservedObject var store: ManualStore
-    @Environment(\.dismiss) var dismiss
+    let manual: Manual; @ObservedObject var store: ManualStore; @Environment(\.dismiss) var dismiss
     @State private var title: String = ""; @State private var equipmentName: String = ""
     @State private var category: String = ""; @State private var tagsString: String = ""
     var body: some View {
         NavigationView {
             Form {
                 Section(header: Text("基本信息")) {
-                    TextField("文档标题 (必填)", text: $title)
-                    TextField("设备名称 (如: 激光切割机)", text: $equipmentName)
-                    TextField("设备类别 (如: 工业设备)", text: $category)
+                    TextField("文档标题 (必填)", text: $title); TextField("设备名称 (如: 激光切割机)", text: $equipmentName); TextField("设备类别 (如: 工业设备)", text: $category)
                 }
                 Section(header: Text("标签管理"), footer: Text("多个标签请用空格或逗号隔开，方便日后精准搜索。")) {
                     TextField("标签 (如: 保修 危险)", text: $tagsString)
@@ -423,9 +401,7 @@ struct EditManualInfoSheet: View {
                 ToolbarItem(placement: .navigationBarLeading) { Button("取消") { dismiss() } }
                 ToolbarItem(placement: .navigationBarTrailing) { Button("保存") { saveChanges() }.fontWeight(.bold) }
             }
-            .onAppear {
-                title = manual.title; equipmentName = manual.equipmentName ?? ""; category = manual.category ?? ""; tagsString = (manual.tags ?? []).joined(separator: " ")
-            }
+            .onAppear { title = manual.title; equipmentName = manual.equipmentName ?? ""; category = manual.category ?? ""; tagsString = (manual.tags ?? []).joined(separator: " ") }
         }
     }
     private func saveChanges() {
@@ -461,7 +437,7 @@ struct ManualCard: View {
     }
 }
 
-// MARK: - 9. 详情阅读器
+// MARK: - 9. 详情阅读器 (核心修复：直接一气呵成向下铺展，消除局部滑块)
 struct ManualDetailView: View {
     let manual: Manual; @ObservedObject var store: ManualStore; var searchText: String
     @Environment(\.presentationMode) var presentationMode; @State private var currentPage = 0
@@ -472,15 +448,22 @@ struct ManualDetailView: View {
                 Text("第 \(currentPage + 1) / \(manual.pagesData.count) 页").font(.subheadline).fontWeight(.medium).foregroundColor(.secondary).padding(.vertical, 8).padding(.horizontal, 16).background(Color(UIColor.secondarySystemBackground)).clipShape(Capsule())
                 Spacer()
             }.padding(.top, 10).padding(.bottom, 5)
+            
             TabView(selection: $currentPage) {
                 ForEach(0..<manual.pagesData.count, id: \.self) { index in
-                    VStack(spacing: 15) {
-                        if let uiImage = UIImage(data: manual.pagesData[index]) { Image(uiImage: uiImage).resizable().scaledToFit().cornerRadius(12).shadow(radius: 5).frame(maxHeight: UIScreen.main.bounds.height * 0.45) }
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack { Text("页面识别内容").font(.caption).fontWeight(.bold).foregroundColor(.blue); Spacer(); if !searchText.isEmpty { Text("关键字高亮中").font(.caption2).foregroundColor(.orange) } }
-                            ScrollView { Text(highlightedText(from: manual.recognizedTexts[index], search: searchText)).lineSpacing(5).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
-                        }.padding().frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).background(Color(UIColor.secondarySystemBackground)).cornerRadius(12)
-                    }.padding().tag(index)
+                    // 【核心修复】：外层套一个 ScrollView，让图和文融为一体，整个页面上下滑动！
+                    ScrollView(showsIndicators: false) {
+                        VStack(spacing: 15) {
+                            if let uiImage = UIImage(data: manual.pagesData[index]) { 
+                                Image(uiImage: uiImage).resizable().scaledToFit().cornerRadius(12).shadow(radius: 5)
+                            }
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack { Text("页面识别内容").font(.caption).fontWeight(.bold).foregroundColor(.blue); Spacer(); if !searchText.isEmpty { Text("关键字高亮中").font(.caption2).foregroundColor(.orange) } }
+                                // 去掉了这里的内部 ScrollView，让文字直接撑开
+                                Text(highlightedText(from: manual.recognizedTexts[index], search: searchText)).lineSpacing(5).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                            }.padding().frame(maxWidth: .infinity, alignment: .topLeading).background(Color(UIColor.secondarySystemBackground)).cornerRadius(12)
+                        }.padding()
+                    }.tag(index)
                 }
             }.tabViewStyle(PageTabViewStyle(indexDisplayMode: .never))
         }
