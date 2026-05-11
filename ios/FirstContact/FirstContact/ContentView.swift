@@ -137,7 +137,40 @@ struct SafariView: UIViewControllerRepresentable {
     func updateUIViewController(_ uiViewController: SFSafariViewController, context: Context) {}
 }
 
-// MARK: - 5. 主界面 UI
+// MARK: - 5. 定制液态玻璃组件 (iOS 26 Style)
+struct LiquidGlassCard<Content: View>: View {
+    let content: Content
+    @State private var animate = false
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        ZStack {
+            ZStack {
+                Circle().fill(Color.blue.opacity(0.5)).frame(width: 150, height: 150)
+                    .offset(x: animate ? -30 : 30, y: animate ? -20 : 20).blur(radius: 40)
+                Circle().fill(Color.orange.opacity(0.4)).frame(width: 120, height: 120)
+                    .offset(x: animate ? 40 : -40, y: animate ? 30 : -30).blur(radius: 30)
+            }
+            .animation(.easeInOut(duration: 5).repeatForever(autoreverses: true), value: animate)
+            .onAppear { animate = true }
+
+            content
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .stroke(LinearGradient(colors: [.white.opacity(0.8), .white.opacity(0.1), .clear, .white.opacity(0.4)], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1.5)
+                        .blendMode(.overlay)
+                )
+                .shadow(color: .black.opacity(0.15), radius: 20, x: 0, y: 15)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+    }
+}
+
+// MARK: - 6. 主界面 UI
 struct ContentView: View {
     @StateObject var store = ManualStore()
     @State private var isScanning = false
@@ -162,11 +195,7 @@ struct ContentView: View {
     @State private var isEditingMode = false
     @State private var selectedManualIDs = Set<UUID>()
     
-    // 【核心修复：强制 Grid 顶端对齐】
-    let columns = [
-        GridItem(.flexible(), spacing: 16, alignment: .top),
-        GridItem(.flexible(), spacing: 16, alignment: .top)
-    ]
+    let columns = [GridItem(.flexible(), spacing: 16, alignment: .top), GridItem(.flexible(), spacing: 16, alignment: .top)]
     
     var filteredAndSortedManuals: [Manual] {
         var result = store.manuals
@@ -310,7 +339,7 @@ struct ContentView: View {
                         try? FileManager.default.removeItem(at: tempURL)
                         do {
                             try FileManager.default.copyItem(at: url, to: tempURL)
-                            if store.restore(from: tempURL) { showSuccess("恢复成功！加载了 \(store.manuals.count) 份说明书。") } else { showSuccess("恢复失败：文件格式不正确，请选择由本软件导出的 JSON 备份文件。") }
+                            if store.restore(from: tempURL) { showSuccess("恢复成功！加载了 \(store.manuals.count) 份说明书。") } else { showSuccess("恢复失败：文件格式不正确。") }
                         } catch { showSuccess("读取文件失败：权限被系统拒绝。") }
                     }
                 case .failure: showSuccess("未能获取文件读取权限")
@@ -364,7 +393,7 @@ struct ContentView: View {
     }
 }
 
-// MARK: - 6. 分类面板
+// MARK: - 7. 分类面板
 struct CategoryListView: View {
     @ObservedObject var store: ManualStore; @Binding var searchText: String; @Environment(\.dismiss) var dismiss
     var groupedManuals: [String: [Manual]] { Dictionary(grouping: store.manuals, by: { guard let cat = $0.category, !cat.isEmpty else { return "未分类" }; return cat }) }
@@ -386,7 +415,7 @@ struct CategoryListView: View {
     }
 }
 
-// MARK: - 7. 编辑属性面板
+// MARK: - 8. 编辑属性面板 (内置高清搜图引擎)
 struct EditManualInfoSheet: View {
     let manual: Manual; @ObservedObject var store: ManualStore; @Environment(\.dismiss) var dismiss
     @State private var title: String = ""; @State private var equipmentName: String = ""
@@ -431,41 +460,42 @@ struct EditManualInfoSheet: View {
     }
 }
 
-// MARK: - 8. 说明书卡片 (修复高度坍塌，对齐完美)
+// MARK: - 9. 说明书卡片 (已嵌套液态玻璃效果)
 struct ManualCard: View {
     let manual: Manual
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if let uiImage = manual.coverImage {
-                Image(uiImage: uiImage).resizable().aspectRatio(3/4, contentMode: .fill).frame(maxWidth: .infinity).clipped().cornerRadius(12)
-            } else {
-                Rectangle().fill(Color.gray.opacity(0.2)).aspectRatio(3/4, contentMode: .fit).cornerRadius(12)
-            }
-            
-            // 【核心修复】：锁死文字区域高度，防止卡片高度不一导致的布局错乱
-            VStack(alignment: .leading, spacing: 6) {
-                Text(manual.title).font(.system(size: 15, weight: .bold)).foregroundColor(.primary).lineLimit(1)
-                
-                if let category = manual.category, !category.isEmpty {
-                    Text(category).font(.system(size: 10, weight: .semibold)).foregroundColor(.blue).padding(.horizontal, 6).padding(.vertical, 2).background(Color.blue.opacity(0.1)).cornerRadius(4)
+        LiquidGlassCard {
+            VStack(alignment: .leading, spacing: 10) {
+                if let uiImage = manual.coverImage {
+                    Image(uiImage: uiImage).resizable().aspectRatio(3/4, contentMode: .fill).frame(maxWidth: .infinity).clipped().cornerRadius(12)
+                } else {
+                    Rectangle().fill(Color.gray.opacity(0.2)).aspectRatio(3/4, contentMode: .fit).cornerRadius(12)
                 }
                 
-                if let tags = manual.tags, !tags.isEmpty {
-                    ScrollView(.horizontal, showsIndicators: false) { HStack(spacing: 4) { ForEach(tags.prefix(3), id: \.self) { tag in Text("#\(tag)").font(.system(size: 10)).foregroundColor(.orange) } } }
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(manual.title).font(.system(size: 15, weight: .bold)).foregroundColor(.primary).lineLimit(1)
+                    
+                    if let category = manual.category, !category.isEmpty {
+                        Text(category).font(.system(size: 10, weight: .semibold)).foregroundColor(.blue).padding(.horizontal, 6).padding(.vertical, 2).background(Color.blue.opacity(0.1)).cornerRadius(4)
+                    }
+                    
+                    if let tags = manual.tags, !tags.isEmpty {
+                        ScrollView(.horizontal, showsIndicators: false) { HStack(spacing: 4) { ForEach(tags.prefix(3), id: \.self) { tag in Text("#\(tag)").font(.system(size: 10)).foregroundColor(.orange) } } }
+                    }
+                    
+                    Spacer(minLength: 0)
+                    
+                    HStack { Text("\(manual.pageCount) 页"); Spacer(); Text(manual.createDate, style: .date) }.font(.system(size: 11)).foregroundColor(.secondary)
                 }
-                
-                Spacer(minLength: 0) // 将页码栏压到底部
-                
-                HStack { Text("\(manual.pageCount) 页"); Spacer(); Text(manual.createDate, style: .date) }.font(.system(size: 11)).foregroundColor(.secondary)
+                .padding(.horizontal, 6)
+                .frame(height: 85, alignment: .top) // 固定高度防止坍塌
             }
-            .padding(.horizontal, 6)
-            .frame(height: 85, alignment: .top) // 固定高度魔法
+            .padding(10)
         }
-        .padding(10).background(Color.white).cornerRadius(18).shadow(color: Color.black.opacity(0.05), radius: 8, x: 0, y: 4)
     }
 }
 
-// MARK: - 9. 详情阅读器
+// MARK: - 10. 详情阅读器
 struct ManualDetailView: View {
     let manual: Manual; @ObservedObject var store: ManualStore; var searchText: String
     @Environment(\.presentationMode) var presentationMode; @State private var currentPage = 0
@@ -476,6 +506,7 @@ struct ManualDetailView: View {
                 Text("第 \(currentPage + 1) / \(manual.pagesData.count) 页").font(.subheadline).fontWeight(.medium).foregroundColor(.secondary).padding(.vertical, 8).padding(.horizontal, 16).background(Color(UIColor.secondarySystemBackground)).clipShape(Capsule())
                 Spacer()
             }.padding(.top, 10).padding(.bottom, 5)
+            
             TabView(selection: $currentPage) {
                 ForEach(0..<manual.pagesData.count, id: \.self) { index in
                     ScrollView(showsIndicators: false) {
@@ -508,7 +539,7 @@ struct ManualDetailView: View {
     }
 }
 
-// MARK: - 10. 扫描仪桥接
+// MARK: - 11. 扫描仪桥接
 struct DocumentScannerBridge: UIViewControllerRepresentable {
     var store: ManualStore; @Binding var isProcessing: Bool; @Binding var processingText: String; @Environment(\.presentationMode) var presentationMode
     func makeUIViewController(context: Context) -> VNDocumentCameraViewController { let scanner = VNDocumentCameraViewController(); scanner.delegate = context.coordinator; return scanner }
@@ -524,7 +555,6 @@ struct DocumentScannerBridge: UIViewControllerRepresentable {
                 
                 let smartTitle = OCRHelper.extractSmartTitle(from: tempTexts)
                 let finalTitle = smartTitle.isEmpty ? "新扫描 \(Date().formatted(date: .abbreviated, time: .shortened))" : smartTitle
-                
                 let newManual = Manual(title: finalTitle, createDate: Date(), pageCount: scan.pageCount, pagesData: tempPagesData, recognizedTexts: tempTexts, equipmentName: smartTitle.isEmpty ? nil : smartTitle)
                 
                 DispatchQueue.main.async { withAnimation { self.parent.store.manuals.insert(newManual, at: 0) }; self.parent.isProcessing = false }
