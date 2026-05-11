@@ -34,7 +34,7 @@ enum SortOption: String, CaseIterable {
     case titleAsc = "名称排序"
 }
 
-// MARK: - 3. OCR 核心引擎 (空间排版还原 + 智能提取标题)
+// MARK: - 3. OCR 核心引擎
 struct TextElement { let text: String; let rect: CGRect }
 struct OCRHelper {
     static func recognizeText(from image: UIImage) -> String {
@@ -137,36 +137,23 @@ struct SafariView: UIViewControllerRepresentable {
     func updateUIViewController(_ uiViewController: SFSafariViewController, context: Context) {}
 }
 
-// MARK: - 5. 定制液态玻璃组件 (iOS 26 Style)
-struct LiquidGlassCard<Content: View>: View {
-    let content: Content
-    @State private var animate = false
-
-    init(@ViewBuilder content: () -> Content) {
-        self.content = content()
+// MARK: - 5. 全局液态玻璃渲染器 (极低性能消耗版)
+struct GlassmorphismModifier: ViewModifier {
+    var cornerRadius: CGFloat
+    func body(content: Content) -> some View {
+        content
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(LinearGradient(colors: [.white.opacity(0.6), .white.opacity(0.1), .clear, .white.opacity(0.3)], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1.5)
+            )
+            .shadow(color: .black.opacity(0.1), radius: 10, x: 0, y: 5)
     }
+}
 
-    var body: some View {
-        ZStack {
-            ZStack {
-                Circle().fill(Color.blue.opacity(0.5)).frame(width: 150, height: 150)
-                    .offset(x: animate ? -30 : 30, y: animate ? -20 : 20).blur(radius: 40)
-                Circle().fill(Color.orange.opacity(0.4)).frame(width: 120, height: 120)
-                    .offset(x: animate ? 40 : -40, y: animate ? 30 : -30).blur(radius: 30)
-            }
-            .animation(.easeInOut(duration: 5).repeatForever(autoreverses: true), value: animate)
-            .onAppear { animate = true }
-
-            content
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 24, style: .continuous)
-                        .stroke(LinearGradient(colors: [.white.opacity(0.8), .white.opacity(0.1), .clear, .white.opacity(0.4)], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1.5)
-                        .blendMode(.overlay)
-                )
-                .shadow(color: .black.opacity(0.15), radius: 20, x: 0, y: 15)
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+extension View {
+    func glassEffect(cornerRadius: CGFloat = 16) -> some View {
+        self.modifier(GlassmorphismModifier(cornerRadius: cornerRadius))
     }
 }
 
@@ -218,7 +205,11 @@ struct ContentView: View {
     var body: some View {
         NavigationView {
             ZStack {
-                Color(UIColor.systemGroupedBackground).ignoresSafeArea()
+                // 【核心修复：全局流彩玻璃底层墙纸，静态轻量渲染，透出高级感，绝不卡顿】
+                LinearGradient(colors: [Color(UIColor.systemGroupedBackground), Color.blue.opacity(0.15), Color.purple.opacity(0.1)], startPoint: .topLeading, endPoint: .bottomTrailing)
+                    .ignoresSafeArea()
+                Circle().fill(Color.orange.opacity(0.15)).frame(width: 300).blur(radius: 80).offset(x: -100, y: -200)
+                Circle().fill(Color.cyan.opacity(0.15)).frame(width: 300).blur(radius: 80).offset(x: 150, y: 300)
                 
                 if filteredAndSortedManuals.isEmpty {
                     emptyState
@@ -258,6 +249,7 @@ struct ContentView: View {
                     }
                 }
                 
+                // 底部操作区 (按钮全部进化为液态玻璃)
                 VStack {
                     Spacer()
                     if isEditingMode {
@@ -273,7 +265,10 @@ struct ContentView: View {
                                     Image(systemName: "trash").font(.headline)
                                     Text("删除所选 (\(selectedManualIDs.count))").fontWeight(.bold)
                                 }
-                                .frame(maxWidth: .infinity).padding().background(selectedManualIDs.isEmpty ? Color.gray : Color.red).foregroundColor(.white).cornerRadius(15)
+                                .frame(maxWidth: .infinity).padding()
+                                .background(selectedManualIDs.isEmpty ? Color.gray.opacity(0.2) : Color.red.opacity(0.5)) // 玻璃底色
+                                .foregroundColor(selectedManualIDs.isEmpty ? .gray : .white)
+                                .glassEffect(cornerRadius: 15) // 赋予玻璃材质
                             }
                             .disabled(selectedManualIDs.isEmpty)
                         }
@@ -283,19 +278,29 @@ struct ContentView: View {
                             HStack(spacing: 15) {
                                 Button(action: { isScanning = true }) {
                                     HStack(spacing: 8) { Image(systemName: "camera.viewfinder").font(.system(size: 18, weight: .bold)); Text("扫描").fontWeight(.bold) }
-                                    .frame(maxWidth: .infinity).padding(.vertical, 14).background(Color.blue).foregroundColor(.white).clipShape(Capsule()).shadow(radius: 5)
+                                    .frame(maxWidth: .infinity).padding(.vertical, 14)
+                                    .background(Color.blue.opacity(0.3)) // 玻璃底层透色
+                                    .foregroundColor(.white)
+                                    .glassEffect(cornerRadius: .infinity) // 无限圆角玻璃
                                 }
                                 PhotosPicker(selection: $selectedPhotos, matching: .images, photoLibrary: .shared()) {
                                     HStack(spacing: 8) { Image(systemName: "photo.on.rectangle").font(.system(size: 18, weight: .bold)); Text("导入").fontWeight(.bold) }
-                                    .frame(maxWidth: .infinity).padding(.vertical, 14).background(Color.indigo).foregroundColor(.white).clipShape(Capsule()).shadow(radius: 5)
+                                    .frame(maxWidth: .infinity).padding(.vertical, 14)
+                                    .background(Color.indigo.opacity(0.3)) // 玻璃底层透色
+                                    .foregroundColor(.white)
+                                    .glassEffect(cornerRadius: .infinity)
                                 }
                                 .onChange(of: selectedPhotos) { newItems in handlePhotoImport(items: newItems) }
                             }
                             .frame(maxWidth: .infinity)
                             
+                            // 悬浮分类按钮 (玻璃质感)
                             Button(action: { showCategorySheet = true }) {
                                 Image(systemName: "square.grid.2x2.fill")
-                                    .font(.system(size: 22)).frame(width: 54, height: 54).background(Color.orange).foregroundColor(.white).clipShape(Circle()).shadow(color: .orange.opacity(0.4), radius: 8, x: 0, y: 4)
+                                    .font(.system(size: 22)).frame(width: 54, height: 54)
+                                    .background(Color.orange.opacity(0.4))
+                                    .foregroundColor(.white)
+                                    .glassEffect(cornerRadius: 27) // 圆形玻璃
                             }
                         }
                         .padding(.horizontal, 20).padding(.bottom, 20)
@@ -339,7 +344,7 @@ struct ContentView: View {
                         try? FileManager.default.removeItem(at: tempURL)
                         do {
                             try FileManager.default.copyItem(at: url, to: tempURL)
-                            if store.restore(from: tempURL) { showSuccess("恢复成功！加载了 \(store.manuals.count) 份说明书。") } else { showSuccess("恢复失败：文件格式不正确。") }
+                            if store.restore(from: tempURL) { showSuccess("恢复成功！加载了 \(store.manuals.count) 份说明书。") } else { showSuccess("恢复失败：文件格式不正确，请选择由本软件导出的 JSON 备份文件。") }
                         } catch { showSuccess("读取文件失败：权限被系统拒绝。") }
                     }
                 case .failure: showSuccess("未能获取文件读取权限")
@@ -415,7 +420,7 @@ struct CategoryListView: View {
     }
 }
 
-// MARK: - 8. 编辑属性面板 (内置高清搜图引擎)
+// MARK: - 8. 编辑属性面板
 struct EditManualInfoSheet: View {
     let manual: Manual; @ObservedObject var store: ManualStore; @Environment(\.dismiss) var dismiss
     @State private var title: String = ""; @State private var equipmentName: String = ""
@@ -460,38 +465,39 @@ struct EditManualInfoSheet: View {
     }
 }
 
-// MARK: - 9. 说明书卡片 (已嵌套液态玻璃效果)
+// MARK: - 9. 说明书卡片 (全局无卡顿玻璃化)
 struct ManualCard: View {
     let manual: Manual
     var body: some View {
-        LiquidGlassCard {
-            VStack(alignment: .leading, spacing: 10) {
-                if let uiImage = manual.coverImage {
-                    Image(uiImage: uiImage).resizable().aspectRatio(3/4, contentMode: .fill).frame(maxWidth: .infinity).clipped().cornerRadius(12)
-                } else {
-                    Rectangle().fill(Color.gray.opacity(0.2)).aspectRatio(3/4, contentMode: .fit).cornerRadius(12)
+        VStack(alignment: .leading, spacing: 10) {
+            if let uiImage = manual.coverImage {
+                Image(uiImage: uiImage).resizable().aspectRatio(3/4, contentMode: .fill).frame(maxWidth: .infinity).clipped().cornerRadius(12)
+            } else {
+                Rectangle().fill(Color.gray.opacity(0.2)).aspectRatio(3/4, contentMode: .fit).cornerRadius(12)
+            }
+            
+            VStack(alignment: .leading, spacing: 6) {
+                Text(manual.title).font(.system(size: 15, weight: .bold)).foregroundColor(.primary).lineLimit(1)
+                
+                if let category = manual.category, !category.isEmpty {
+                    Text(category).font(.system(size: 10, weight: .semibold)).foregroundColor(.blue).padding(.horizontal, 6).padding(.vertical, 2).background(Color.blue.opacity(0.1)).cornerRadius(4)
                 }
                 
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(manual.title).font(.system(size: 15, weight: .bold)).foregroundColor(.primary).lineLimit(1)
-                    
-                    if let category = manual.category, !category.isEmpty {
-                        Text(category).font(.system(size: 10, weight: .semibold)).foregroundColor(.blue).padding(.horizontal, 6).padding(.vertical, 2).background(Color.blue.opacity(0.1)).cornerRadius(4)
-                    }
-                    
-                    if let tags = manual.tags, !tags.isEmpty {
-                        ScrollView(.horizontal, showsIndicators: false) { HStack(spacing: 4) { ForEach(tags.prefix(3), id: \.self) { tag in Text("#\(tag)").font(.system(size: 10)).foregroundColor(.orange) } } }
-                    }
-                    
-                    Spacer(minLength: 0)
-                    
-                    HStack { Text("\(manual.pageCount) 页"); Spacer(); Text(manual.createDate, style: .date) }.font(.system(size: 11)).foregroundColor(.secondary)
+                if let tags = manual.tags, !tags.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) { HStack(spacing: 4) { ForEach(tags.prefix(3), id: \.self) { tag in Text("#\(tag)").font(.system(size: 10)).foregroundColor(.orange) } } }
                 }
-                .padding(.horizontal, 6)
-                .frame(height: 85, alignment: .top) // 固定高度防止坍塌
+                
+                Spacer(minLength: 0)
+                
+                HStack { Text("\(manual.pageCount) 页"); Spacer(); Text(manual.createDate, style: .date) }.font(.system(size: 11)).foregroundColor(.secondary)
             }
-            .padding(10)
+            .padding(.horizontal, 6)
+            .frame(height: 85, alignment: .top)
         }
+        .padding(10)
+        // 核心：替换掉原来的笨重流体玻璃，使用轻量级静态折射玻璃
+        .background(Color.white.opacity(0.1)) // 轻微提亮底色
+        .glassEffect(cornerRadius: 18)
     }
 }
 
