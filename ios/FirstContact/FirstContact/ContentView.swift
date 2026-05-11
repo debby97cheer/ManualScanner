@@ -4,7 +4,7 @@ import Vision
 import UniformTypeIdentifiers
 import Combine
 import PhotosUI
-import SafariServices // 【新增】：用于唤起内置浏览器
+import SafariServices
 
 // MARK: - 1. 核心模型
 struct Manual: Identifiable, Codable {
@@ -34,7 +34,7 @@ enum SortOption: String, CaseIterable {
     case titleAsc = "名称排序"
 }
 
-// MARK: - 3. OCR 核心引擎
+// MARK: - 3. OCR 核心引擎 (空间排版还原 + 智能提取标题)
 struct TextElement { let text: String; let rect: CGRect }
 struct OCRHelper {
     static func recognizeText(from image: UIImage) -> String {
@@ -86,6 +86,32 @@ struct OCRHelper {
         try? VNImageRequestHandler(cgImage: cgImage).perform([request])
         return result
     }
+    
+    // 【新增】：智能标题提取算法
+    static func extractSmartTitle(from texts: [String]) -> String {
+        guard let firstPageText = texts.first, !firstPageText.isEmpty else { return "" }
+        let lines = firstPageText.components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        
+        let keywords = ["说明书", "手册", "指南", "使用说明", "安装", "注意事项", "manual", "guide"]
+        
+        // 策略1：优先寻找含有关键词的行 (比如：大疆无人机使用说明书)
+        for line in lines {
+            if line.count <= 35 {
+                for keyword in keywords {
+                    if line.lowercased().contains(keyword) { return line }
+                }
+            }
+        }
+        
+        // 策略2：如果没有说明书字眼，取第一行长度适中、看起来像商品名的粗体/大字
+        for line in lines {
+            if line.count >= 2 && line.count <= 25 { return line }
+        }
+        
+        return ""
+    }
 }
 
 // MARK: - 4. 数据管理中心
@@ -105,14 +131,13 @@ class ManualStore: ObservableObject {
 }
 
 struct BackupDocument: FileDocument {
-    static var readableContentTypes: [UTType] { [.json, .plainText, .data] }
+    static var readableContentTypes: [UTType] { [.json] }
     var fileURL: URL
     init(url: URL) { self.fileURL = url }
     init(configuration: ReadConfiguration) throws { fatalError("只用于导出") }
     func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper { return try FileWrapper(url: fileURL, options: .immediate) }
 }
 
-// MARK: - 5. 内置浏览器桥接 (用于网搜封面)
 struct SafariView: UIViewControllerRepresentable {
     let url: URL
     func makeUIViewController(context: Context) -> SFSafariViewController {
@@ -123,32 +148,28 @@ struct SafariView: UIViewControllerRepresentable {
     func updateUIViewController(_ uiViewController: SFSafariViewController, context: Context) {}
 }
 
-// MARK: - 6. 主界面 UI
+// MARK: - 5. 主界面 UI
 struct ContentView: View {
     @StateObject var store = ManualStore()
     @State private var isScanning = false
     @State private var isProcessing = false
     @State private var processingText = ""
     
-    // 导入导出
     @State private var showExporter = false
     @State private var showImporter = false
     @State private var alertMessage = ""
     @State private var showAlert = false
     
-    // 封面与导入
     @State private var selectedPhotos: [PhotosPickerItem] = []
     @State private var selectedCoverItem: PhotosPickerItem? = nil
     @State private var manualToChangeCover: Manual? = nil
     @State private var isShowingCoverPicker = false
     
-    // 搜索、编辑、分类
     @State private var searchText = ""
     @State private var sortOption: SortOption = .dateDesc
     @State private var manualToEdit: Manual? = nil
     @State private var showCategorySheet = false
     
-    // 批量管理
     @State private var isEditingMode = false
     @State private var selectedManualIDs = Set<UUID>()
     
@@ -215,7 +236,6 @@ struct ContentView: View {
                     }
                 }
                 
-                // 底部操作区
                 VStack {
                     Spacer()
                     if isEditingMode {
@@ -278,9 +298,7 @@ struct ContentView: View {
                         Button(action: {
                             withAnimation { isEditingMode.toggle() }
                             if !isEditingMode { selectedManualIDs.removeAll() }
-                        }) {
-                            Text(isEditingMode ? "完成" : "管理").font(.system(size: 16, weight: .bold))
-                        }
+                        }) { Text(isEditingMode ? "完成" : "管理").font(.system(size: 16, weight: .bold)) }
                     }
                 }
             }
@@ -289,10 +307,13 @@ struct ContentView: View {
             .onChange(of: selectedCoverItem) { newItem in handleCoverSelection(item: newItem) }
             .sheet(isPresented: $isScanning) { DocumentScannerBridge(store: store, isProcessing: $isProcessing, processingText: $processingText) }
             .sheet(item: $manualToEdit) { manual in EditManualInfoSheet(manual: manual, store: store) }
+            
             .fileExporter(isPresented: $showExporter, document: BackupDocument(url: store.savePath), contentType: .json, defaultFilename: "Manuals_Backup.json") { result in
                 switch result { case .success: showSuccess("导出备份成功！") case .failure: break }
             }
-            .fileImporter(isPresented: $showImporter, allowedContentTypes: [.item], allowsMultipleSelection: false) { result in
+            
+            // 【神级修复】：放宽所有的 UTType，允许选中任何文件（.json, .data, .item, .content 等）
+            .fileImporter(isPresented: $showImporter, allowedContentTypes: [.item, .content, .data, .json, .plainText], allowsMultipleSelection: false) { result in
                 switch result {
                 case .success(let urls):
                     guard let url = urls.first else { return }
@@ -302,10 +323,8 @@ struct ContentView: View {
                         try? FileManager.default.removeItem(at: tempURL)
                         do {
                             try FileManager.default.copyItem(at: url, to: tempURL)
-                            if store.restore(from: tempURL) { showSuccess("恢复成功！加载了 \(store.manuals.count) 份说明书。") } else { showSuccess("恢复失败：文件格式不正确，请选择正确的备份文件。") }
-                        } catch {
-                            showSuccess("读取文件失败：权限被系统拒绝。")
-                        }
+                            if store.restore(from: tempURL) { showSuccess("恢复成功！加载了 \(store.manuals.count) 份说明书。") } else { showSuccess("恢复失败：文件格式不正确，请选择由本软件导出的 JSON 备份文件。") }
+                        } catch { showSuccess("读取文件失败：权限被系统拒绝。") }
                     }
                 case .failure: showSuccess("未能获取文件读取权限")
                 }
@@ -329,7 +348,7 @@ struct ContentView: View {
 
     private func handlePhotoImport(items: [PhotosPickerItem]) {
         guard !items.isEmpty else { return }
-        isProcessing = true; processingText = "正在解析并还原真实排版..."
+        isProcessing = true; processingText = "正在解析并提取智能标题..."
         Task {
             var tempPagesData: [Data] = []; var tempTexts: [String] = []
             for item in items {
@@ -339,7 +358,12 @@ struct ContentView: View {
                 }
             }
             if !tempPagesData.isEmpty {
-                let newManual = Manual(title: "导入文档 \(Date().formatted(date: .abbreviated, time: .shortened))", createDate: Date(), pageCount: tempPagesData.count, pagesData: tempPagesData, recognizedTexts: tempTexts)
+                // 【调用智能标题提取算法】
+                let smartTitle = OCRHelper.extractSmartTitle(from: tempTexts)
+                let finalTitle = smartTitle.isEmpty ? "导入文档 \(Date().formatted(date: .abbreviated, time: .shortened))" : smartTitle
+                
+                let newManual = Manual(title: finalTitle, createDate: Date(), pageCount: tempPagesData.count, pagesData: tempPagesData, recognizedTexts: tempTexts, equipmentName: smartTitle.isEmpty ? nil : smartTitle)
+                
                 DispatchQueue.main.async { withAnimation { self.store.manuals.insert(newManual, at: 0) }; self.isProcessing = false; self.selectedPhotos.removeAll() }
             } else { DispatchQueue.main.async { self.isProcessing = false; showSuccess("图片解析失败") } }
         }
@@ -351,84 +375,53 @@ struct ContentView: View {
         VStack(spacing: 25) {
             Image(systemName: "doc.text.magnifyingglass").font(.system(size: 70)).foregroundStyle(.linearGradient(colors: [.gray, .gray.opacity(0.4)], startPoint: .top, endPoint: .bottom))
             Text(searchText.isEmpty ? "没有任何归档" : "未搜索到相关内容").font(.title3).fontWeight(.bold)
-            Text(searchText.isEmpty ? "数字化您的说明书\n长按卡片可编辑属性和封面" : "换个关键词试试吧").font(.subheadline).foregroundColor(.secondary).multilineTextAlignment(.center)
+            Text(searchText.isEmpty ? "数字化您的说明书\n智能提取商品名，一秒完成归档" : "换个关键词试试吧").font(.subheadline).foregroundColor(.secondary).multilineTextAlignment(.center)
         }
     }
 }
 
-// MARK: - 7. 分类面板
+// MARK: - 6. 分类面板
 struct CategoryListView: View {
-    @ObservedObject var store: ManualStore
-    @Binding var searchText: String
-    @Environment(\.dismiss) var dismiss
-    
-    var groupedManuals: [String: [Manual]] {
-        Dictionary(grouping: store.manuals, by: {
-            guard let cat = $0.category, !cat.isEmpty else { return "未分类" }
-            return cat
-        })
-    }
-    
+    @ObservedObject var store: ManualStore; @Binding var searchText: String; @Environment(\.dismiss) var dismiss
+    var groupedManuals: [String: [Manual]] { Dictionary(grouping: store.manuals, by: { guard let cat = $0.category, !cat.isEmpty else { return "未分类" }; return cat }) }
     var body: some View {
         NavigationView {
             List {
                 ForEach(groupedManuals.keys.sorted(), id: \.self) { category in
-                    Button(action: {
-                        searchText = category == "未分类" ? "" : category
-                        dismiss()
-                    }) {
+                    Button(action: { searchText = category == "未分类" ? "" : category; dismiss() }) {
                         HStack {
                             Image(systemName: category == "未分类" ? "folder" : "folder.fill").foregroundColor(category == "未分类" ? .gray : .orange).font(.title2)
-                            Text(category).font(.headline).foregroundColor(.primary)
-                            Spacer()
+                            Text(category).font(.headline).foregroundColor(.primary); Spacer()
                             Text("\(groupedManuals[category]?.count ?? 0) 份").foregroundColor(.secondary).font(.subheadline)
                         }.padding(.vertical, 8)
                     }
                 }
             }
-            .navigationTitle("分类检索").navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .navigationBarTrailing) { Button("关闭") { dismiss() } } }
+            .navigationTitle("分类检索").navigationBarTitleDisplayMode(.inline).toolbar { ToolbarItem(placement: .navigationBarTrailing) { Button("关闭") { dismiss() } } }
         }
     }
 }
 
-// MARK: - 8. 编辑属性面板 (内置高清搜图引擎)
+// MARK: - 7. 编辑属性面板 (内置高清搜图引擎)
 struct EditManualInfoSheet: View {
     let manual: Manual; @ObservedObject var store: ManualStore; @Environment(\.dismiss) var dismiss
     @State private var title: String = ""; @State private var equipmentName: String = ""
     @State private var category: String = ""; @State private var tagsString: String = ""
-    
-    // 内置浏览器相关状态
-    @State private var showSafari = false
-    @State private var searchURL: URL? = nil
+    @State private var showSafari = false; @State private var searchURL: URL? = nil
     
     var body: some View {
         NavigationView {
             Form {
                 Section(header: Text("基本信息")) {
                     TextField("文档标题 (必填)", text: $title)
-                    
                     HStack {
                         TextField("设备名称 (如: 激光切割机)", text: $equipmentName)
-                        
-                        // 【绝杀功能】：输入名字后，出现一键搜图按钮
                         if !equipmentName.isEmpty {
                             Button(action: {
-                                // 组装 Bing 图片搜索 URL，自动加上“正视图”优化搜图质量
-                                if let encoded = "\(equipmentName) 正视图".addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
-                                   let url = URL(string: "https://cn.bing.com/images/search?q=\(encoded)") {
-                                    searchURL = url
-                                    showSafari = true
-                                }
-                            }) {
-                                Image(systemName: "photo.badge.magnifyingglass")
-                                    .foregroundColor(.blue)
-                                    .font(.title3)
-                            }
-                            .buttonStyle(BorderlessButtonStyle()) // 防止触发整个 Cell
+                                if let encoded = "\(equipmentName) 正视图".addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed), let url = URL(string: "https://cn.bing.com/images/search?q=\(encoded)") { searchURL = url; showSafari = true }
+                            }) { Image(systemName: "photo.badge.magnifyingglass").foregroundColor(.blue).font(.title3) }.buttonStyle(BorderlessButtonStyle())
                         }
                     }
-                    
                     TextField("设备类别 (如: 工业设备)", text: $category)
                 }
                 Section(header: Text("标签管理"), footer: Text("提示：如果想用网上的图片做封面，点击设备名称右侧的🔍图标，在弹出的网页里长按心仪的图片保存到相册，然后回首页长按卡片修改封面即可。")) {
@@ -441,20 +434,12 @@ struct EditManualInfoSheet: View {
                 ToolbarItem(placement: .navigationBarTrailing) { Button("保存") { saveChanges() }.fontWeight(.bold) }
             }
             .onAppear { title = manual.title; equipmentName = manual.equipmentName ?? ""; category = manual.category ?? ""; tagsString = (manual.tags ?? []).joined(separator: " ") }
-            // 弹出内置搜图浏览器
-            .sheet(isPresented: $showSafari) {
-                if let url = searchURL {
-                    SafariView(url: url)
-                        .ignoresSafeArea()
-                }
-            }
+            .sheet(isPresented: $showSafari) { if let url = searchURL { SafariView(url: url).ignoresSafeArea() } }
         }
     }
     private func saveChanges() {
         if let index = store.manuals.firstIndex(where: { $0.id == manual.id }) {
-            store.manuals[index].title = title.isEmpty ? "未命名说明书" : title
-            store.manuals[index].equipmentName = equipmentName.isEmpty ? nil : equipmentName
-            store.manuals[index].category = category.isEmpty ? nil : category
+            store.manuals[index].title = title.isEmpty ? "未命名说明书" : title; store.manuals[index].equipmentName = equipmentName.isEmpty ? nil : equipmentName; store.manuals[index].category = category.isEmpty ? nil : category
             let parsedTags = tagsString.replacingOccurrences(of: "，", with: ",").split(whereSeparator: { $0 == " " || $0 == "," }).map(String.init).filter { !$0.isEmpty }
             store.manuals[index].tags = parsedTags.isEmpty ? nil : parsedTags
         }
@@ -462,7 +447,7 @@ struct EditManualInfoSheet: View {
     }
 }
 
-// MARK: - 9. 说明书卡片
+// MARK: - 8. 说明书卡片
 struct ManualCard: View {
     let manual: Manual
     var body: some View {
@@ -483,7 +468,7 @@ struct ManualCard: View {
     }
 }
 
-// MARK: - 10. 详情阅读器
+// MARK: - 9. 详情阅读器
 struct ManualDetailView: View {
     let manual: Manual; @ObservedObject var store: ManualStore; var searchText: String
     @Environment(\.presentationMode) var presentationMode; @State private var currentPage = 0
@@ -518,9 +503,7 @@ struct ManualDetailView: View {
         while searchRange.location < nsString.length {
             let foundRange = nsString.range(of: search, options: .caseInsensitive, range: searchRange)
             if foundRange.location != NSNotFound {
-                if let swiftRange = Range(foundRange, in: text), let attrRange = Range(swiftRange, in: attrString) {
-                    attrString[attrRange].backgroundColor = .yellow; attrString[attrRange].foregroundColor = .black
-                }
+                if let swiftRange = Range(foundRange, in: text), let attrRange = Range(swiftRange, in: attrString) { attrString[attrRange].backgroundColor = .yellow; attrString[attrRange].foregroundColor = .black }
                 searchRange.location = foundRange.location + foundRange.length; searchRange.length = nsString.length - searchRange.location
             } else { break }
         }
@@ -528,7 +511,7 @@ struct ManualDetailView: View {
     }
 }
 
-// MARK: - 11. 扫描仪桥接
+// MARK: - 10. 扫描仪桥接
 struct DocumentScannerBridge: UIViewControllerRepresentable {
     var store: ManualStore; @Binding var isProcessing: Bool; @Binding var processingText: String; @Environment(\.presentationMode) var presentationMode
     func makeUIViewController(context: Context) -> VNDocumentCameraViewController { let scanner = VNDocumentCameraViewController(); scanner.delegate = context.coordinator; return scanner }
@@ -537,11 +520,17 @@ struct DocumentScannerBridge: UIViewControllerRepresentable {
     class Coordinator: NSObject, VNDocumentCameraViewControllerDelegate {
         var parent: DocumentScannerBridge; init(_ parent: DocumentScannerBridge) { self.parent = parent }
         func documentCameraViewController(_ controller: VNDocumentCameraViewController, didFinishWith scan: VNDocumentCameraScan) {
-            parent.processingText = "正在解析并还原真实排版..."; parent.isProcessing = true; parent.presentationMode.wrappedValue.dismiss()
+            parent.processingText = "正在解析并提取智能标题..."; parent.isProcessing = true; parent.presentationMode.wrappedValue.dismiss()
             DispatchQueue.global(qos: .userInitiated).async {
                 var tempPagesData: [Data] = []; var tempTexts: [String] = []
                 for i in 0..<scan.pageCount { let img = scan.imageOfPage(at: i); if let d = img.jpegData(compressionQuality: 0.7) { tempPagesData.append(d) }; tempTexts.append(OCRHelper.recognizeText(from: img)) }
-                let newManual = Manual(title: "新扫描 \(Date().formatted(date: .abbreviated, time: .shortened))", createDate: Date(), pageCount: scan.pageCount, pagesData: tempPagesData, recognizedTexts: tempTexts)
+                
+                // 【调用智能标题提取算法】
+                let smartTitle = OCRHelper.extractSmartTitle(from: tempTexts)
+                let finalTitle = smartTitle.isEmpty ? "新扫描 \(Date().formatted(date: .abbreviated, time: .shortened))" : smartTitle
+                
+                let newManual = Manual(title: finalTitle, createDate: Date(), pageCount: scan.pageCount, pagesData: tempPagesData, recognizedTexts: tempTexts, equipmentName: smartTitle.isEmpty ? nil : smartTitle)
+                
                 DispatchQueue.main.async { withAnimation { self.parent.store.manuals.insert(newManual, at: 0) }; self.parent.isProcessing = false }
             }
         }
