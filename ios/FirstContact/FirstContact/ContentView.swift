@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 import Combine
 import PhotosUI
 
-// MARK: - 1. 核心模型 (新增设备元数据)
+// MARK: - 1. 核心模型
 struct Manual: Identifiable, Codable {
     var id = UUID()
     var title: String
@@ -15,7 +15,6 @@ struct Manual: Identifiable, Codable {
     var recognizedTexts: [String]
     var customCoverData: Data? 
     
-    // 新增：结构化参数 (设为可选型，完美兼容旧数据)
     var equipmentName: String?
     var category: String?
     var tags: [String]?
@@ -34,15 +33,93 @@ enum SortOption: String, CaseIterable {
     case titleAsc = "名称排序"
 }
 
-// MARK: - 3. OCR 核心引擎
+// MARK: - 3. OCR 核心引擎 (神级修复：空间几何排版还原算法)
+struct TextElement {
+    let text: String
+    let rect: CGRect
+}
+
 struct OCRHelper {
     static func recognizeText(from image: UIImage) -> String {
         guard let cgImage = image.cgImage else { return "" }
         var result = ""
+        
         let request = VNRecognizeTextRequest { req, _ in
             let observations = req.results as? [VNRecognizedTextObservation] ?? []
-            result = observations.compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n")
+            var elements: [TextElement] = []
+            
+            // 1. 抓取所有文字块的物理坐标 (Vision 的原点在左下角，需要转成左上角)
+            for obs in observations {
+                if let top = obs.topCandidates(1).first {
+                    let rect = CGRect(
+                        x: obs.boundingBox.minX,
+                        y: 1.0 - obs.boundingBox.maxY,
+                        width: obs.boundingBox.width,
+                        height: obs.boundingBox.height
+                    )
+                    elements.append(TextElement(text: top.string, rect: rect))
+                }
+            }
+            
+            // 2. 按 Y 轴（从上到下）排序
+            elements.sort { $0.rect.minY < $1.rect.minY }
+            
+            // 3. 把同一水平线上的文字归为同一“行”
+            var lines: [[TextElement]] = []
+            for el in elements {
+                if lines.isEmpty {
+                    lines.append([el])
+                } else {
+                    let lastLineIndex = lines.count - 1
+                    let lastEl = lines[lastLineIndex].last!
+                    // 如果 Y 轴距离非常近，说明在同一行
+                    let yDistance = abs(el.rect.midY - lastEl.rect.midY)
+                    let avgHeight = (el.rect.height + lastEl.rect.height) / 2.0
+                    
+                    if yDistance < avgHeight * 0.6 {
+                        lines[lastLineIndex].append(el)
+                    } else {
+                        lines.append([el])
+                    }
+                }
+            }
+            
+            // 4. 计算行间距和字间距，还原真实排版
+            var finalString = ""
+            var previousLineMaxY: CGFloat = -1
+            
+            for line in lines {
+                // 行内按 X 轴（从左到右）排序
+                let sortedLine = line.sorted { $0.rect.minX < $1.rect.minX }
+                
+                // 计算换行数量 (还原段落间距)
+                if previousLineMaxY != -1 {
+                    let yGap = sortedLine.first!.rect.minY - previousLineMaxY
+                    let avgHeight = sortedLine.map { $0.rect.height }.reduce(0, +) / CGFloat(sortedLine.count)
+                    let newlines = max(1, Int(round(yGap / (avgHeight * 1.5))))
+                    finalString += String(repeating: "\n", count: min(3, newlines)) // 最多留3个空行，防止太长
+                }
+                
+                var lineStr = ""
+                var previousMaxX: CGFloat = -1
+                
+                // 计算缩进和水平空格 (还原左右分栏)
+                for el in sortedLine {
+                    if previousMaxX != -1 {
+                        let xGap = el.rect.minX - previousMaxX
+                        let charWidth = el.rect.width / CGFloat(max(1, el.text.count))
+                        let spaces = max(1, Int(round(xGap / charWidth)))
+                        lineStr += String(repeating: " ", count: min(15, spaces)) // 最多补15个空格
+                    }
+                    lineStr += el.text
+                    previousMaxX = el.rect.maxX
+                }
+                finalString += lineStr
+                previousLineMaxY = sortedLine.map { $0.rect.maxY }.max() ?? -1
+            }
+            result = finalString
         }
+        
         request.recognitionLanguages = ["zh-Hans", "en-US"]
         request.recognitionLevel = .accurate
         request.usesLanguageCorrection = true
@@ -105,30 +182,29 @@ struct ContentView: View {
     @State private var showAlert = false
     
     @State private var selectedPhotos: [PhotosPickerItem] = []
+    
+    // 封面修改修复状态
     @State private var selectedCoverItem: PhotosPickerItem? = nil
     @State private var manualToChangeCover: Manual? = nil
+    @State private var isShowingCoverPicker = false // 核心修复：用弹窗状态主动触发图库
     
     @State private var searchText = ""
     @State private var sortOption: SortOption = .dateDesc
     
-    // 编辑属性页面状态
     @State private var manualToEdit: Manual? = nil
     
     let columns = [GridItem(.flexible(), spacing: 16), GridItem(.flexible(), spacing: 16)]
     
-    // 多维搜索引擎
     var filteredAndSortedManuals: [Manual] {
         var result = store.manuals
         if !searchText.isEmpty {
             result = result.filter { manual in
                 let searchStr = searchText.lowercased()
-                
                 let matchTitle = manual.title.localizedCaseInsensitiveContains(searchStr)
                 let matchText = manual.recognizedTexts.joined(separator: " ").localizedCaseInsensitiveContains(searchStr)
                 let matchEquip = manual.equipmentName?.localizedCaseInsensitiveContains(searchStr) ?? false
                 let matchCategory = manual.category?.localizedCaseInsensitiveContains(searchStr) ?? false
                 let matchTags = manual.tags?.contains(where: { $0.localizedCaseInsensitiveContains(searchStr) }) ?? false
-                
                 return matchTitle || matchText || matchEquip || matchCategory || matchTags
             }
         }
@@ -157,9 +233,12 @@ struct ContentView: View {
                                     ManualCard(manual: manual)
                                 }
                                 .contextMenu {
-                                    Button { manualToChangeCover = manual } label: { Label("修改封面", systemImage: "photo.stack") }
+                                    // 核心修复：点击修改封面，唤起独立的 PhotoPicker
+                                    Button {
+                                        manualToChangeCover = manual
+                                        isShowingCoverPicker = true
+                                    } label: { Label("修改封面", systemImage: "photo.stack") }
                                     
-                                    // 唤起完整编辑面板
                                     Button { manualToEdit = manual } label: { Label("编辑属性", systemImage: "info.circle") }
                                     
                                     Button(role: .destructive) {
@@ -174,10 +253,6 @@ struct ContentView: View {
                         .padding(.bottom, 80)
                     }
                 }
-                
-                PhotosPicker(selection: $selectedCoverItem, matching: .images, photoLibrary: .shared()) { EmptyView() }
-                    .disabled(manualToChangeCover == nil)
-                    .onChange(of: selectedCoverItem) { newItem in handleCoverSelection(item: newItem) }
                 
                 VStack {
                     Spacer()
@@ -221,11 +296,12 @@ struct ContentView: View {
                     } label: { Image(systemName: "arrow.up.arrow.down.circle").font(.title3) }
                 }
             }
+            // 修改封面的触发器
+            .photosPicker(isPresented: $isShowingCoverPicker, selection: $selectedCoverItem, matching: .images)
+            .onChange(of: selectedCoverItem) { newItem in handleCoverSelection(item: newItem) }
+            
             .sheet(isPresented: $isScanning) { DocumentScannerBridge(store: store, isProcessing: $isProcessing, processingText: $processingText) }
-            // 独立编辑面板
-            .sheet(item: $manualToEdit) { manual in
-                EditManualInfoSheet(manual: manual, store: store)
-            }
+            .sheet(item: $manualToEdit) { manual in EditManualInfoSheet(manual: manual, store: store) }
             .fileExporter(isPresented: $showExporter, document: BackupDocument(url: store.savePath), contentType: .json, defaultFilename: "Manuals_Backup.json") { result in
                 switch result { case .success: showSuccess("备份成功！") case .failure: break }
             }
@@ -252,7 +328,8 @@ struct ContentView: View {
                let compressed = uiImage.jpegData(compressionQuality: 0.6) {
                 DispatchQueue.main.async {
                     if let index = store.manuals.firstIndex(where: { $0.id == manual.id }) { store.manuals[index].customCoverData = compressed }
-                    self.manualToChangeCover = nil; self.selectedCoverItem = nil
+                    self.manualToChangeCover = nil
+                    self.selectedCoverItem = nil
                 }
             }
         }
@@ -260,7 +337,7 @@ struct ContentView: View {
 
     private func handlePhotoImport(items: [PhotosPickerItem]) {
         guard !items.isEmpty else { return }
-        isProcessing = true; processingText = "正在分析相册图片..."
+        isProcessing = true; processingText = "正在解析并还原真实排版..."
         Task {
             var tempPagesData: [Data] = []; var tempTexts: [String] = []
             for item in items {
@@ -289,7 +366,7 @@ struct ContentView: View {
     }
 }
 
-// MARK: - 6. 编辑属性面板 (独立 Sheet)
+// MARK: - 6. 编辑属性面板
 struct EditManualInfoSheet: View {
     let manual: Manual
     @ObservedObject var store: ManualStore
@@ -308,7 +385,6 @@ struct EditManualInfoSheet: View {
                     TextField("设备名称 (如: 激光切割机)", text: $equipmentName)
                     TextField("设备类别 (如: 工业设备)", text: $category)
                 }
-                
                 Section(header: Text("标签管理"), footer: Text("多个标签请用空格或逗号隔开，方便日后精准搜索。")) {
                     TextField("标签 (如: 保修 危险 2026采购)", text: $tagsString)
                 }
@@ -316,13 +392,8 @@ struct EditManualInfoSheet: View {
             .navigationTitle("编辑属性")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("取消") { dismiss() }
-                }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("保存") { saveChanges() }
-                        .fontWeight(.bold)
-                }
+                ToolbarItem(placement: .navigationBarLeading) { Button("取消") { dismiss() } }
+                ToolbarItem(placement: .navigationBarTrailing) { Button("保存") { saveChanges() }.fontWeight(.bold) }
             }
             .onAppear {
                 title = manual.title
@@ -339,20 +410,14 @@ struct EditManualInfoSheet: View {
             store.manuals[index].equipmentName = equipmentName.isEmpty ? nil : equipmentName
             store.manuals[index].category = category.isEmpty ? nil : category
             
-            // 解析标签，支持空格和逗号分割
-            let parsedTags = tagsString
-                .replacingOccurrences(of: "，", with: ",")
-                .split(whereSeparator: { $0 == " " || $0 == "," })
-                .map(String.init)
-                .filter { !$0.isEmpty }
-            
+            let parsedTags = tagsString.replacingOccurrences(of: "，", with: ",").split(whereSeparator: { $0 == " " || $0 == "," }).map(String.init).filter { !$0.isEmpty }
             store.manuals[index].tags = parsedTags.isEmpty ? nil : parsedTags
         }
         dismiss()
     }
 }
 
-// MARK: - 7. 说明书卡片 (新增标签与类别展示)
+// MARK: - 7. 说明书卡片
 struct ManualCard: View {
     let manual: Manual
     var body: some View {
@@ -366,29 +431,18 @@ struct ManualCard: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text(manual.title).font(.system(size: 15, weight: .bold)).foregroundColor(.primary).lineLimit(1)
                 
-                // 元数据显示区域
                 if let category = manual.category, !category.isEmpty {
-                    Text(category)
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundColor(.blue)
-                        .padding(.horizontal, 6).padding(.vertical, 2)
-                        .background(Color.blue.opacity(0.1)).cornerRadius(4)
+                    Text(category).font(.system(size: 10, weight: .semibold)).foregroundColor(.blue).padding(.horizontal, 6).padding(.vertical, 2).background(Color.blue.opacity(0.1)).cornerRadius(4)
                 }
                 
                 if let tags = manual.tags, !tags.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 4) {
-                            ForEach(tags.prefix(3), id: \.self) { tag in
-                                Text("#\(tag)")
-                                    .font(.system(size: 10))
-                                    .foregroundColor(.orange)
-                            }
+                            ForEach(tags.prefix(3), id: \.self) { tag in Text("#\(tag)").font(.system(size: 10)).foregroundColor(.orange) }
                         }
                     }
                 }
-                
-                HStack { Text("\(manual.pageCount) 页"); Spacer(); Text(manual.createDate, style: .date) }
-                    .font(.system(size: 11)).foregroundColor(.secondary)
+                HStack { Text("\(manual.pageCount) 页"); Spacer(); Text(manual.createDate, style: .date) }.font(.system(size: 11)).foregroundColor(.secondary)
             }
             .padding(.horizontal, 6)
         }
@@ -428,8 +482,13 @@ struct ManualDetailView: View {
                                 Spacer()
                                 if !searchText.isEmpty { Text("关键字高亮中").font(.caption2).foregroundColor(.orange) }
                             }
+                            // 只有下方文字区可以微调滑动
                             ScrollView {
-                                Text(highlightedText(from: manual.recognizedTexts[index], search: searchText)).lineSpacing(5).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                                // 提取文本时保留了换行和空格排版
+                                Text(highlightedText(from: manual.recognizedTexts[index], search: searchText))
+                                    .lineSpacing(5)
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
                             }
                         }.padding().frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).background(Color(UIColor.secondarySystemBackground)).cornerRadius(12)
                     }.padding().tag(index)
@@ -451,7 +510,9 @@ struct ManualDetailView: View {
     
     private func highlightedText(from text: String, search: String) -> AttributedString {
         var attrString = AttributedString(text)
-        attrString.font = .system(size: 14); attrString.foregroundColor = .primary
+        // 使用等宽字体 (monospaced) 来渲染，这样识别出来的多余空格才能严格对齐！
+        attrString.font = .system(size: 13, design: .monospaced)
+        attrString.foregroundColor = .primary
         guard !search.isEmpty else { return attrString }
         let nsString = text as NSString
         var searchRange = NSRange(location: 0, length: nsString.length)
@@ -483,7 +544,7 @@ struct DocumentScannerBridge: UIViewControllerRepresentable {
         var parent: DocumentScannerBridge
         init(_ parent: DocumentScannerBridge) { self.parent = parent }
         func documentCameraViewController(_ controller: VNDocumentCameraViewController, didFinishWith scan: VNDocumentCameraScan) {
-            parent.processingText = "正在解析中..."; parent.isProcessing = true; parent.presentationMode.wrappedValue.dismiss()
+            parent.processingText = "正在解析并还原真实排版..."; parent.isProcessing = true; parent.presentationMode.wrappedValue.dismiss()
             DispatchQueue.global(qos: .userInitiated).async {
                 var tempPagesData: [Data] = []; var tempTexts: [String] = []
                 for i in 0..<scan.pageCount {
