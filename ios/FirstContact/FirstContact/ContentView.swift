@@ -87,16 +87,10 @@ struct OCRHelper {
         return result
     }
     
-    // 【新增】：智能标题提取算法
     static func extractSmartTitle(from texts: [String]) -> String {
         guard let firstPageText = texts.first, !firstPageText.isEmpty else { return "" }
-        let lines = firstPageText.components(separatedBy: .newlines)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-        
+        let lines = firstPageText.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         let keywords = ["说明书", "手册", "指南", "使用说明", "安装", "注意事项", "manual", "guide"]
-        
-        // 策略1：优先寻找含有关键词的行 (比如：大疆无人机使用说明书)
         for line in lines {
             if line.count <= 35 {
                 for keyword in keywords {
@@ -104,12 +98,9 @@ struct OCRHelper {
                 }
             }
         }
-        
-        // 策略2：如果没有说明书字眼，取第一行长度适中、看起来像商品名的粗体/大字
         for line in lines {
             if line.count >= 2 && line.count <= 25 { return line }
         }
-        
         return ""
     }
 }
@@ -141,9 +132,7 @@ struct BackupDocument: FileDocument {
 struct SafariView: UIViewControllerRepresentable {
     let url: URL
     func makeUIViewController(context: Context) -> SFSafariViewController {
-        let safariVC = SFSafariViewController(url: url)
-        safariVC.preferredControlTintColor = .systemBlue
-        return safariVC
+        let safariVC = SFSafariViewController(url: url); safariVC.preferredControlTintColor = .systemBlue; return safariVC
     }
     func updateUIViewController(_ uiViewController: SFSafariViewController, context: Context) {}
 }
@@ -173,7 +162,11 @@ struct ContentView: View {
     @State private var isEditingMode = false
     @State private var selectedManualIDs = Set<UUID>()
     
-    let columns = [GridItem(.flexible(), spacing: 16), GridItem(.flexible(), spacing: 16)]
+    // 【核心修复：强制 Grid 顶端对齐】
+    let columns = [
+        GridItem(.flexible(), spacing: 16, alignment: .top),
+        GridItem(.flexible(), spacing: 16, alignment: .top)
+    ]
     
     var filteredAndSortedManuals: [Manual] {
         var result = store.manuals
@@ -291,10 +284,7 @@ struct ContentView: View {
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     HStack(spacing: 15) {
-                        Menu {
-                            Picker("排序", selection: $sortOption) { ForEach(SortOption.allCases, id: \.self) { o in Text(o.rawValue).tag(o) } }
-                        } label: { Image(systemName: "arrow.up.arrow.down.circle").font(.title3) }
-                        
+                        Menu { Picker("排序", selection: $sortOption) { ForEach(SortOption.allCases, id: \.self) { o in Text(o.rawValue).tag(o) } } } label: { Image(systemName: "arrow.up.arrow.down.circle").font(.title3) }
                         Button(action: {
                             withAnimation { isEditingMode.toggle() }
                             if !isEditingMode { selectedManualIDs.removeAll() }
@@ -307,12 +297,9 @@ struct ContentView: View {
             .onChange(of: selectedCoverItem) { newItem in handleCoverSelection(item: newItem) }
             .sheet(isPresented: $isScanning) { DocumentScannerBridge(store: store, isProcessing: $isProcessing, processingText: $processingText) }
             .sheet(item: $manualToEdit) { manual in EditManualInfoSheet(manual: manual, store: store) }
-            
             .fileExporter(isPresented: $showExporter, document: BackupDocument(url: store.savePath), contentType: .json, defaultFilename: "Manuals_Backup.json") { result in
                 switch result { case .success: showSuccess("导出备份成功！") case .failure: break }
             }
-            
-            // 【神级修复】：放宽所有的 UTType，允许选中任何文件（.json, .data, .item, .content 等）
             .fileImporter(isPresented: $showImporter, allowedContentTypes: [.item, .content, .data, .json, .plainText], allowsMultipleSelection: false) { result in
                 switch result {
                 case .success(let urls):
@@ -358,12 +345,9 @@ struct ContentView: View {
                 }
             }
             if !tempPagesData.isEmpty {
-                // 【调用智能标题提取算法】
                 let smartTitle = OCRHelper.extractSmartTitle(from: tempTexts)
                 let finalTitle = smartTitle.isEmpty ? "导入文档 \(Date().formatted(date: .abbreviated, time: .shortened))" : smartTitle
-                
                 let newManual = Manual(title: finalTitle, createDate: Date(), pageCount: tempPagesData.count, pagesData: tempPagesData, recognizedTexts: tempTexts, equipmentName: smartTitle.isEmpty ? nil : smartTitle)
-                
                 DispatchQueue.main.async { withAnimation { self.store.manuals.insert(newManual, at: 0) }; self.isProcessing = false; self.selectedPhotos.removeAll() }
             } else { DispatchQueue.main.async { self.isProcessing = false; showSuccess("图片解析失败") } }
         }
@@ -402,7 +386,7 @@ struct CategoryListView: View {
     }
 }
 
-// MARK: - 7. 编辑属性面板 (内置高清搜图引擎)
+// MARK: - 7. 编辑属性面板
 struct EditManualInfoSheet: View {
     let manual: Manual; @ObservedObject var store: ManualStore; @Environment(\.dismiss) var dismiss
     @State private var title: String = ""; @State private var equipmentName: String = ""
@@ -447,24 +431,37 @@ struct EditManualInfoSheet: View {
     }
 }
 
-// MARK: - 8. 说明书卡片
+// MARK: - 8. 说明书卡片 (修复高度坍塌，对齐完美)
 struct ManualCard: View {
     let manual: Manual
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if let uiImage = manual.coverImage { Image(uiImage: uiImage).resizable().aspectRatio(3/4, contentMode: .fill).frame(maxWidth: .infinity).clipped().cornerRadius(12)
-            } else { Rectangle().fill(Color.gray.opacity(0.2)).aspectRatio(3/4, contentMode: .fit).cornerRadius(12) }
+            if let uiImage = manual.coverImage {
+                Image(uiImage: uiImage).resizable().aspectRatio(3/4, contentMode: .fill).frame(maxWidth: .infinity).clipped().cornerRadius(12)
+            } else {
+                Rectangle().fill(Color.gray.opacity(0.2)).aspectRatio(3/4, contentMode: .fit).cornerRadius(12)
+            }
+            
+            // 【核心修复】：锁死文字区域高度，防止卡片高度不一导致的布局错乱
             VStack(alignment: .leading, spacing: 6) {
                 Text(manual.title).font(.system(size: 15, weight: .bold)).foregroundColor(.primary).lineLimit(1)
+                
                 if let category = manual.category, !category.isEmpty {
                     Text(category).font(.system(size: 10, weight: .semibold)).foregroundColor(.blue).padding(.horizontal, 6).padding(.vertical, 2).background(Color.blue.opacity(0.1)).cornerRadius(4)
                 }
+                
                 if let tags = manual.tags, !tags.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) { HStack(spacing: 4) { ForEach(tags.prefix(3), id: \.self) { tag in Text("#\(tag)").font(.system(size: 10)).foregroundColor(.orange) } } }
                 }
+                
+                Spacer(minLength: 0) // 将页码栏压到底部
+                
                 HStack { Text("\(manual.pageCount) 页"); Spacer(); Text(manual.createDate, style: .date) }.font(.system(size: 11)).foregroundColor(.secondary)
-            }.padding(.horizontal, 6)
-        }.padding(10).background(Color.white).cornerRadius(18).shadow(color: Color.black.opacity(0.05), radius: 8, x: 0, y: 4)
+            }
+            .padding(.horizontal, 6)
+            .frame(height: 85, alignment: .top) // 固定高度魔法
+        }
+        .padding(10).background(Color.white).cornerRadius(18).shadow(color: Color.black.opacity(0.05), radius: 8, x: 0, y: 4)
     }
 }
 
@@ -525,7 +522,6 @@ struct DocumentScannerBridge: UIViewControllerRepresentable {
                 var tempPagesData: [Data] = []; var tempTexts: [String] = []
                 for i in 0..<scan.pageCount { let img = scan.imageOfPage(at: i); if let d = img.jpegData(compressionQuality: 0.7) { tempPagesData.append(d) }; tempTexts.append(OCRHelper.recognizeText(from: img)) }
                 
-                // 【调用智能标题提取算法】
                 let smartTitle = OCRHelper.extractSmartTitle(from: tempTexts)
                 let finalTitle = smartTitle.isEmpty ? "新扫描 \(Date().formatted(date: .abbreviated, time: .shortened))" : smartTitle
                 
