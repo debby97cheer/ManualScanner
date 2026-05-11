@@ -2,6 +2,7 @@ import SwiftUI
 import VisionKit
 import Vision
 import UniformTypeIdentifiers // 用于文件导入导出
+import Combine  // <--- 加上这一行，立刻解决报错！
 
 // MARK: - 1. 核心模型
 struct Manual: Identifiable, Codable {
