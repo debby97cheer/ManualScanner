@@ -137,7 +137,7 @@ struct SafariView: UIViewControllerRepresentable {
     func updateUIViewController(_ uiViewController: SFSafariViewController, context: Context) {}
 }
 
-// MARK: - 5. 全局液态玻璃渲染器 (极低性能消耗版)
+// MARK: - 5. 全局液态玻璃渲染器
 struct GlassmorphismModifier: ViewModifier {
     var cornerRadius: CGFloat
     func body(content: Content) -> some View {
@@ -205,7 +205,6 @@ struct ContentView: View {
     var body: some View {
         NavigationView {
             ZStack {
-                // 【核心修复：全局流彩玻璃底层墙纸，静态轻量渲染，透出高级感，绝不卡顿】
                 LinearGradient(colors: [Color(UIColor.systemGroupedBackground), Color.blue.opacity(0.15), Color.purple.opacity(0.1)], startPoint: .topLeading, endPoint: .bottomTrailing)
                     .ignoresSafeArea()
                 Circle().fill(Color.orange.opacity(0.15)).frame(width: 300).blur(radius: 80).offset(x: -100, y: -200)
@@ -249,7 +248,6 @@ struct ContentView: View {
                     }
                 }
                 
-                // 底部操作区 (按钮全部进化为液态玻璃)
                 VStack {
                     Spacer()
                     if isEditingMode {
@@ -266,9 +264,9 @@ struct ContentView: View {
                                     Text("删除所选 (\(selectedManualIDs.count))").fontWeight(.bold)
                                 }
                                 .frame(maxWidth: .infinity).padding()
-                                .background(selectedManualIDs.isEmpty ? Color.gray.opacity(0.2) : Color.red.opacity(0.5)) // 玻璃底色
+                                .background(selectedManualIDs.isEmpty ? Color.gray.opacity(0.2) : Color.red.opacity(0.5))
                                 .foregroundColor(selectedManualIDs.isEmpty ? .gray : .white)
-                                .glassEffect(cornerRadius: 15) // 赋予玻璃材质
+                                .glassEffect(cornerRadius: 15)
                             }
                             .disabled(selectedManualIDs.isEmpty)
                         }
@@ -279,14 +277,14 @@ struct ContentView: View {
                                 Button(action: { isScanning = true }) {
                                     HStack(spacing: 8) { Image(systemName: "camera.viewfinder").font(.system(size: 18, weight: .bold)); Text("扫描").fontWeight(.bold) }
                                     .frame(maxWidth: .infinity).padding(.vertical, 14)
-                                    .background(Color.blue.opacity(0.3)) // 玻璃底层透色
+                                    .background(Color.blue.opacity(0.3))
                                     .foregroundColor(.white)
-                                    .glassEffect(cornerRadius: .infinity) // 无限圆角玻璃
+                                    .glassEffect(cornerRadius: .infinity)
                                 }
                                 PhotosPicker(selection: $selectedPhotos, matching: .images, photoLibrary: .shared()) {
                                     HStack(spacing: 8) { Image(systemName: "photo.on.rectangle").font(.system(size: 18, weight: .bold)); Text("导入").fontWeight(.bold) }
                                     .frame(maxWidth: .infinity).padding(.vertical, 14)
-                                    .background(Color.indigo.opacity(0.3)) // 玻璃底层透色
+                                    .background(Color.indigo.opacity(0.3))
                                     .foregroundColor(.white)
                                     .glassEffect(cornerRadius: .infinity)
                                 }
@@ -294,13 +292,12 @@ struct ContentView: View {
                             }
                             .frame(maxWidth: .infinity)
                             
-                            // 悬浮分类按钮 (玻璃质感)
                             Button(action: { showCategorySheet = true }) {
                                 Image(systemName: "square.grid.2x2.fill")
                                     .font(.system(size: 22)).frame(width: 54, height: 54)
                                     .background(Color.orange.opacity(0.4))
                                     .foregroundColor(.white)
-                                    .glassEffect(cornerRadius: 27) // 圆形玻璃
+                                    .glassEffect(cornerRadius: 27)
                             }
                         }
                         .padding(.horizontal, 20).padding(.bottom, 20)
@@ -344,7 +341,7 @@ struct ContentView: View {
                         try? FileManager.default.removeItem(at: tempURL)
                         do {
                             try FileManager.default.copyItem(at: url, to: tempURL)
-                            if store.restore(from: tempURL) { showSuccess("恢复成功！加载了 \(store.manuals.count) 份说明书。") } else { showSuccess("恢复失败：文件格式不正确，请选择由本软件导出的 JSON 备份文件。") }
+                            if store.restore(from: tempURL) { showSuccess("恢复成功！加载了 \(store.manuals.count) 份说明书。") } else { showSuccess("恢复失败：文件格式不正确。") }
                         } catch { showSuccess("读取文件失败：权限被系统拒绝。") }
                     }
                 case .failure: showSuccess("未能获取文件读取权限")
@@ -465,7 +462,7 @@ struct EditManualInfoSheet: View {
     }
 }
 
-// MARK: - 9. 说明书卡片 (全局无卡顿玻璃化)
+// MARK: - 9. 说明书卡片
 struct ManualCard: View {
     let manual: Manual
     var body: some View {
@@ -478,33 +475,108 @@ struct ManualCard: View {
             
             VStack(alignment: .leading, spacing: 6) {
                 Text(manual.title).font(.system(size: 15, weight: .bold)).foregroundColor(.primary).lineLimit(1)
-                
                 if let category = manual.category, !category.isEmpty {
                     Text(category).font(.system(size: 10, weight: .semibold)).foregroundColor(.blue).padding(.horizontal, 6).padding(.vertical, 2).background(Color.blue.opacity(0.1)).cornerRadius(4)
                 }
-                
                 if let tags = manual.tags, !tags.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) { HStack(spacing: 4) { ForEach(tags.prefix(3), id: \.self) { tag in Text("#\(tag)").font(.system(size: 10)).foregroundColor(.orange) } } }
                 }
-                
                 Spacer(minLength: 0)
-                
                 HStack { Text("\(manual.pageCount) 页"); Spacer(); Text(manual.createDate, style: .date) }.font(.system(size: 11)).foregroundColor(.secondary)
             }
             .padding(.horizontal, 6)
             .frame(height: 85, alignment: .top)
         }
         .padding(10)
-        // 核心：替换掉原来的笨重流体玻璃，使用轻量级静态折射玻璃
-        .background(Color.white.opacity(0.1)) // 轻微提亮底色
+        .background(Color.white.opacity(0.1))
         .glassEffect(cornerRadius: 18)
     }
 }
 
-// MARK: - 10. 详情阅读器
+// MARK: - 10. 【新增】全屏沉浸式看图组件
+struct FullScreenItem: Identifiable {
+    let id = UUID()
+    let data: Data
+}
+
+struct FullScreenImageView: View {
+    let imageData: Data
+    @Environment(\.dismiss) var dismiss
+    
+    // 缩放、拖拽与旋转状态
+    @State private var scale: CGFloat = 1.0
+    @State private var lastScale: CGFloat = 1.0
+    @State private var offset: CGSize = .zero
+    @State private var lastOffset: CGSize = .zero
+    @State private var rotation: Double = 0.0
+    
+    var body: some View {
+        NavigationView {
+            ZStack {
+                Color.black.ignoresSafeArea()
+                
+                if let uiImage = UIImage(data: imageData) {
+                    Image(uiImage: uiImage)
+                        .resizable()
+                        .scaledToFit()
+                        .rotationEffect(.degrees(rotation))
+                        .scaleEffect(scale)
+                        .offset(offset)
+                        // 手势 1：双指捏合缩放
+                        .gesture(
+                            MagnificationGesture()
+                                .onChanged { value in scale = lastScale * value }
+                                .onEnded { _ in
+                                    if scale < 1.0 {
+                                        withAnimation { scale = 1.0; lastScale = 1.0; offset = .zero; lastOffset = .zero }
+                                    } else { lastScale = scale }
+                                }
+                        )
+                        // 手势 2：单指拖拽平移 (仅在放大时生效)
+                        .simultaneousGesture(
+                            DragGesture()
+                                .onChanged { value in
+                                    if scale > 1.0 {
+                                        offset = CGSize(width: lastOffset.width + value.translation.width, height: lastOffset.height + value.translation.height)
+                                    }
+                                }
+                                .onEnded { _ in lastOffset = offset }
+                        )
+                        // 手势 3：双击快速放大/复原
+                        .onTapGesture(count: 2) {
+                            withAnimation {
+                                if scale > 1.0 {
+                                    scale = 1.0; lastScale = 1.0; offset = .zero; lastOffset = .zero
+                                } else {
+                                    scale = 2.0; lastScale = 2.0
+                                }
+                            }
+                        }
+                }
+            }
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button(action: { dismiss() }) { Image(systemName: "xmark.circle.fill").foregroundColor(.white.opacity(0.8)).font(.title2) }
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button(action: { withAnimation { rotation += 90 } }) { Image(systemName: "rotate.right.fill").foregroundColor(.white.opacity(0.8)).font(.title2) }
+                }
+            }
+        }
+        .preferredColorScheme(.dark) // 强制深色模式，保证全屏体验
+    }
+}
+
+// MARK: - 11. 详情阅读器 (融入全屏看图功能)
 struct ManualDetailView: View {
     let manual: Manual; @ObservedObject var store: ManualStore; var searchText: String
-    @Environment(\.presentationMode) var presentationMode; @State private var currentPage = 0
+    @Environment(\.presentationMode) var presentationMode
+    @State private var currentPage = 0
+    
+    // 控制全屏看图的状态
+    @State private var fullScreenItem: FullScreenItem? = nil
+    
     var body: some View {
         VStack(spacing: 0) {
             HStack {
@@ -517,7 +589,21 @@ struct ManualDetailView: View {
                 ForEach(0..<manual.pagesData.count, id: \.self) { index in
                     ScrollView(showsIndicators: false) {
                         VStack(spacing: 15) {
-                            if let uiImage = UIImage(data: manual.pagesData[index]) { Image(uiImage: uiImage).resizable().scaledToFit().cornerRadius(12).shadow(radius: 5) }
+                            if let uiImage = UIImage(data: manual.pagesData[index]) {
+                                // 带有点击提示的图片容器
+                                ZStack(alignment: .bottomTrailing) {
+                                    Image(uiImage: uiImage).resizable().scaledToFit().cornerRadius(12)
+                                    
+                                    Image(systemName: "arrow.up.left.and.arrow.down.right.circle.fill")
+                                        .foregroundColor(.black.opacity(0.6))
+                                        .font(.title)
+                                        .padding(10)
+                                }
+                                .shadow(radius: 5)
+                                // 点击唤起全屏浏览
+                                .onTapGesture { fullScreenItem = FullScreenItem(data: manual.pagesData[index]) }
+                            }
+                            
                             VStack(alignment: .leading, spacing: 8) {
                                 HStack { Text("页面识别内容").font(.caption).fontWeight(.bold).foregroundColor(.blue); Spacer(); if !searchText.isEmpty { Text("关键字高亮中").font(.caption2).foregroundColor(.orange) } }
                                 Text(highlightedText(from: manual.recognizedTexts[index], search: searchText)).lineSpacing(5).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
@@ -529,7 +615,12 @@ struct ManualDetailView: View {
         }
         .navigationTitle(manual.title).navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement: .navigationBarTrailing) { Button(role: .destructive, action: { if let index = store.manuals.firstIndex(where: { $0.id == manual.id }) { store.manuals.remove(at: index); presentationMode.wrappedValue.dismiss() } }) { Image(systemName: "trash").foregroundColor(.red) } } }
+        // 全屏看图的 Sheet
+        .fullScreenCover(item: $fullScreenItem) { item in
+            FullScreenImageView(imageData: item.data)
+        }
     }
+    
     private func highlightedText(from text: String, search: String) -> AttributedString {
         var attrString = AttributedString(text); attrString.font = .system(size: 13, design: .monospaced); attrString.foregroundColor = .primary
         guard !search.isEmpty else { return attrString }
@@ -545,7 +636,7 @@ struct ManualDetailView: View {
     }
 }
 
-// MARK: - 11. 扫描仪桥接
+// MARK: - 12. 扫描仪桥接
 struct DocumentScannerBridge: UIViewControllerRepresentable {
     var store: ManualStore; @Binding var isProcessing: Bool; @Binding var processingText: String; @Environment(\.presentationMode) var presentationMode
     func makeUIViewController(context: Context) -> VNDocumentCameraViewController { let scanner = VNDocumentCameraViewController(); scanner.delegate = context.coordinator; return scanner }
